@@ -562,9 +562,17 @@ class AnalogChannel(Channel):
     fall_time = property(__get_fall_time)
 
     def __get_frequency(self):
-        return float(self.scope.query(":MEAS:FREQ? %d" % self.name))
+        return float(self.scope.query(":MEAS:FREQ? %s" % self.name))
     frequency = property(__get_frequency)
 
+    def __get_pwidth(self):
+        return float(self.scope.query(":MEAS:PWIDTH? %s" % self.name))
+    pwidth = property(__get_pwidth)
+
+    def __get_nwidth(self):
+        return float(self.scope.query(":MEAS:NWIDTH? %s" % self.name))
+    nwidth = property(__get_nwidth)
+    
     def get_rawdata(self, points=1000):
         if points not in (100, 200, 500, 1000, 2000, None):
             raise ValueError("Number of points for acquisition should be 100, 200, 500, 1000 or 2000")
