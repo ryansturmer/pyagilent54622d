@@ -331,17 +331,28 @@ class SPIAnalyzer(LogicAnalyzer):
 
             miso_edges = analyzer.edges('MISO')
             mosi_edges = analyzer.edges('MOSI')
-            miso_rising = sum([nearest_difference(x, rising_clock) for x in miso_edges])/len(miso_edges)
-            miso_falling = sum([nearest_difference(x, falling_clock) for x in miso_edges])/len(miso_edges)
-            mosi_rising = sum([nearest_difference(x, rising_clock) for x in mosi_edges])/len(mosi_edges)
-            mosi_falling = sum([nearest_difference(x, falling_clock) for x in mosi_edges])/len(mosi_edges)
-            miso_mode = 2 if miso_rising < miso_falling else 0
-            mosi_mode = 2 if mosi_rising < mosi_falling else 0
+            try:
+                miso_rising = sum([nearest_difference(x, rising_clock) for x in miso_edges])/len(miso_edges)
+                miso_falling = sum([nearest_difference(x, falling_clock) for x in miso_edges])/len(miso_edges)
+                miso_mode = 2 if miso_rising < miso_falling else 0
+            except:
+                miso_mode = 0
+            
+            try:
+                mosi_rising = sum([nearest_difference(x, rising_clock) for x in mosi_edges])/len(mosi_edges)
+                mosi_falling = sum([nearest_difference(x, falling_clock) for x in mosi_edges])/len(mosi_edges)
+                mosi_mode = 2 if mosi_rising < mosi_falling else 0
+            except:
+                mosi_mode = 0
+            
+            if miso_mode == None and mosi_mode != None: miso_mode = mosi_mode
+            if mosi_mode == None and miso_mode != None: mosi_mode = miso_mode
+
             if miso_mode != mosi_mode:
                 raise ValueError("Outbound and Inbound SPI modes do not match!  Master and slave are operating in different modes!")
             pha = miso_mode 
             start = analyzer.state("SCK", analyzer.timebase[0]) 
-            
+            end = analyzer.state("SCK", analyzer.timebase[-1]) 
             if start:
                 pol = 1
                 pha = 2 if pha == 0 else 1
