@@ -485,12 +485,24 @@ class Scope(object):
     def __iter__(self):
         return iter([self.a1, self.a2, self.d0, self.d1, self.d2, self.d3, self.d4, self.d5, self.d6, self.d7, self.d8, self.d9, self.d10, self.d11, self.d12, self.d13, self.d14, self.d15])
 
+    def clear_labels(self):
+        for channel in self:
+            channel.label = ""
+
+    def set_labels(self, labels):
+        for channel in labels:
+            self[channel].label = labels[channel]
+
     def __getitem__(self, key):
         for x in (self.channels, self.cursors) + tuple(self.pods.values()) + (self.pods,):
             try:
                 return x[key]
             except:
                 continue
+        
+        if key in self:
+            return key
+        
         raise KeyError("Nope.")
 
     def query(self,query,type=QUERY_ASCII):
