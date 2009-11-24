@@ -24,6 +24,8 @@ DIGITAL_14 = "DIG14"
 DIGITAL_15 = "DIG15"
 DIGITAL = (DIGITAL_0, DIGITAL_1, DIGITAL_2, DIGITAL_3, DIGITAL_4, DIGITAL_5, DIGITAL_6, DIGITAL_7, DIGITAL_8, DIGITAL_9, DIGITAL_10,DIGITAL_11,DIGITAL_12,DIGITAL_13,DIGITAL_14,DIGITAL_15)
 
+CHANNELS = tuple(ANALOG + DIGITAL)
+
 POD1 = "POD1"
 POD2 = "POD2"
 PODS = (POD1, POD2)
@@ -165,6 +167,15 @@ class DigitalChannel(Channel):
 
     def get_rawdata(self, points=1000):
         return self.pod.get_rawdata(points)[self.pod.channels.index(self)]
+
+def channel2name(channel):
+    if isinstance(channel, Channel):
+        return channel.name
+    elif isinstance(channel, str):
+        return channel
+    
+    #return channel if channel in channels
+    raise Exception("%s is not a valid channel." % channel)
 
 class Pod(object):
 
@@ -348,6 +359,7 @@ class StandardTrigger(object):
         self.scope = parent
 
     def __set_source(self, source):
+        if isinstance(source, Channel): source = source.name
         if source not in TRIGGER_SOURCES:
             raise ValueError("%s not a valid trigger source." % source)
         self.scope.command(":TRIG:SOUR %s" % source)
@@ -423,6 +435,11 @@ class Scope(object):
         self.cursors[X2] = Cursor(self, X2)
         self.cursors[Y1] = Cursor(self, Y1)
         self.cursors[Y2] = Cursor(self, Y2)
+
+        self.x1 = self.cursors[X1]
+        self.x2 = self.cursors[X2]
+        self.y1 = self.cursors[Y1]
+        self.y2 = self.cursors[Y2]
 
         self.pod1 = self.pods[POD1]
         self.pod2 = self.pods[POD2]

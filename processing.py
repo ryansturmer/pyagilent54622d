@@ -53,6 +53,9 @@ class LogicAnalyzer(object):
         return retval
 
     def edges(self, key):
+        '''
+        Return the time from the timebase at which the provided waveform transitions from high to low or low to high.
+        '''
         retval = []
         waveform = self.digitized_waveforms[key]
         for i in range(len(waveform)-1):
@@ -214,7 +217,6 @@ class I2CAnalyzer(LogicAnalyzer):
         return retval
 
 class SPITransaction(object):
-
     def __init__(self, outbound, inbound, mode, analyzer):
         if len(outbound) != len(inbound): raise Exception("Inbound and outbound data sizes do not match!")
         self.outbound = outbound
@@ -222,6 +224,21 @@ class SPITransaction(object):
         self.mode = mode
         self.analyzer = analyzer
         self.timebase = analyzer.timebase
+        self.cs_lead_time = analyzer.edges('SCK')[0] - analyzer.timebase[0]
+        self.cs_lag_time = analyzer.timebase[-1] - analyzer.edges('SCK')[-1]
+        self.data_rate = len(inbound)/(analyzer.timebase[-1] - analyzer.timebase[0])
+    def pretty(self):
+        
+        s =  "      SPI Transaction\n"
+        s += "-----------------------------\n"
+        s += "        Mode: 0x%x\n" % self.mode
+        s += "CS Lead Time: %gs\n" % self.cs_lead_time
+        s += " CS Lag Time: %gs\n" % self.cs_lag_time
+        s += "   Data Rate: %d bps\n" % self.data_rate
+        s += "        Data: Outbound  Inbound\n"
+        for i, (inbound, outbound) in enumerate(zip(self.inbound, self.outbound)):
+            s += "         %03d: 0x%02x      0x%02x\n" % (i, outbound, inbound)
+        return s
     def __len__(self):
         return len(self.outbound)
 
@@ -265,9 +282,9 @@ class SPIAnalyzer(LogicAnalyzer):
 
     def transactions(self):
         retval = []
+
         def nearest_difference(p,l):
             return min([abs(p-x) for x in l])
-
         
         for analyzer in self.transaction_analyzers():
             rising_clock = analyzer.rising_edges('SCK')
