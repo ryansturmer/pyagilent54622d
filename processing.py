@@ -224,9 +224,16 @@ class SPITransaction(object):
         self.mode = mode
         self.analyzer = analyzer
         self.timebase = analyzer.timebase
-        self.cs_lead_time = analyzer.edges('SCK')[0] - analyzer.timebase[0]
-        self.cs_lag_time = analyzer.timebase[-1] - analyzer.edges('SCK')[-1]
-        self.data_rate = len(inbound)/(analyzer.timebase[-1] - analyzer.timebase[0])
+        clock_edges = analyzer.edges('SCK')
+        clock_gaps = []
+        for i in range(len(clock_edges)-1):
+            clock_gaps.append(clock_edges[i+1] - clock_edges[i])
+        self.min_sck_time = min(clock_gaps)
+        self.max_sck_time = max(clock_gaps)
+        self.cs_lead_time = clock_edges[0] - analyzer.timebase[0]
+        self.cs_lag_time = analyzer.timebase[-1] - clock_edges[-1]
+        self.data_rate = len(inbound)*8/(analyzer.timebase[-1] - analyzer.timebase[0])
+
     def pretty(self):
         
         s =  "      SPI Transaction\n"
@@ -234,6 +241,8 @@ class SPITransaction(object):
         s += "        Mode: 0x%x\n" % self.mode
         s += "CS Lead Time: %gs\n" % self.cs_lead_time
         s += " CS Lag Time: %gs\n" % self.cs_lag_time
+        s += "Min SCK Time: %gs\n" % self.min_sck_time
+        s += "Max SCK Time: %gs\n" % self.max_sck_time
         s += "   Data Rate: %d bps\n" % self.data_rate
         s += "        Data: Outbound  Inbound\n"
         for i, (inbound, outbound) in enumerate(zip(self.inbound, self.outbound)):

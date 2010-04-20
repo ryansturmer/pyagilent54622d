@@ -1,6 +1,7 @@
 from __future__ import with_statement 
 import time
 from processing import *
+import serial
 
 ANALOG_1 = "CHAN1"
 ANALOG_2 = "CHAN2"
@@ -50,35 +51,117 @@ RISING = "POS"
 FALLING = "NEG"
 SLOPES = (RISING, FALLING)
 
+NORMAL = "NORMAL"
+AUTO = "AUTO"
+AUTO_LEVEL = "AUTOL"
+
 QUERY_NONE = 0
 QUERY_ASCII = 1
 QUERY_BINARY = 2
+
+CMOS = "CMOS"
+ECL = "ECL"
+TTL = "TTL"
+THRESHOLDS = (CMOS, ECL, TTL)
 
 PERIOD = "PER"
 PHASE = "PHAS"
 PRESHOOT = "PRES"
 PULSE_WIDTH = "PWID"
+class Instrument(object):
+    '''
+    Abstract baseclass for Agilent HPIB Instruments that can chat over RS-232
+    '''
+    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False, rtscts=False, dsrdtr=False, stopbits=serial.STOPBITS_ONE):
+        """
+        Creates a connection to the serial port with the specified settings.
+        
+        comPortName -> COM port name. Form: 'COM1'
+        baudRate -> Baud rate. Possible values: 9600, 19200, 38400, or 57600
+        timeout -> Maximum time in seconds to wait for scope to respond.
+                   Possible values: an int >= 0
+        """
+        self.comPortName=port
+        self.baudRate=baud
+        self.timeout=timeout
 
-class GroupProxy(list):
+        self.port=serial.Serial(port=self.comPortName,baudrate=self.baudRate,timeout=self.timeout, rtscts=rtscts, dsrdtr=dsrdtr, stopbits=stopbits)
+        self.port.flush()
+        self.port.flushInput()
+        self.port.close()
+        self.verbose = verbose
 
-    def __init__(self, *args, **kwargs):
-        list.__init__(self, *args, **kwargs)
+    def query(self,query,type=QUERY_ASCII):
+        return self.commands(((query, type),))[0]
 
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            return GroupProxy(self[key])
-        else:
-            return self[key]
+    def command(self,command):
+        self.commands(((command,False),))
 
-    def __getattr__(self, key):
-        return GroupProxy([getattr(item, key) for item in self])
+    def commands(self, commands):
+        self.errors()
+        self.port.open()
+        result = None
+        # Make sure we clear the scope output before executing commands
+        commands = [("*CLS", QUERY_NONE)] + list(commands) 
+        result = []
+        try:
+            for command, query in commands:
+                if self.verbose:
+                    print "--> '%s'" % command
+                self.port.write(command+"\n")
+                if query == QUERY_ASCII:
+                    s = self.port.readline().strip()
+                    if self.verbose:
+                        print "<-- '%s'" % s
+                    result.append(s)
+                elif query == QUERY_BINARY:
+                    pound, digits = self.port.read(2)
+                    if pound != "#": raise Exception("Unexpected response in binary query.")
+                    try: digits =int(digits)
+                    except: raise Exception("Could not read binary query header.")
+                    try: size = int(self.port.read(digits))
+                    except: raise Exception("Could not read binary query block size.")
+                    binstring = ''
+                    while len(binstring) < size:
+                        binstring += self.port.read()
+                    result.append(binstring)
+                    if self.verbose:
+                        if len(binstring) > 0:
+                            print "<-- <%d bytes of binary data>" % len(binstring)
+                else:
+                    result.append(None)
+        except:
+            self.port.close()
+            raise
+        self.port.close()
+        self.errors(True)
+        return result[1:]
 
-    def __setattr__(self, key, value):
-        return GroupProxy([setattr(item, key, value) for item in self])
+    def errors(self, raise_errors=False):
+        """
+        Returns all errors from the scope's error queue.
+        """
+        self.port.open()
+        try:
+            errors=[]
+            self.port.write(":SYSTEM:ERR?\n")
+            error=self.port.readline()
+            while error.find("+0") is -1 and error is not '':
+                errors.append(error)
+                self.port.write(":SYSTEM:ERR?\n")
+                error=self.port.readline()
+            self.port.flush()
+            self.port.flushInput()
+        except:
+            self.port.close()
+            raise
+        self.port.close()
+        if raise_errors:
+            if errors:
+                raise Exception(errors[0])
+        return errors
 
-    def __call__(self, *args, **kwargs):
-        return GroupProxy([item.__class__.__call__(item, *args, **kwargs) for item in self])
-
+        
 class Channel(object):
     
     def __init__(self, parent, name):
@@ -153,10 +236,13 @@ class DigitalChannel(Channel):
         self.pod = parent
 
     def __get_threshold(self):
-        pass
+        return None
 
-    def __set_threshold(self):
-        pass
+    def __set_threshold(self, value):
+        if value not in THRESHOLDS:
+            value = "+%0.2f" % value
+        self.scope.command("DIG%s:THR %s" % (self.name, value))
+    threshold = property(__get_threshold, __set_threshold)
 
     def __get_position(self):
         return int(self.scope.query("%s:POS?" % self.name))
@@ -166,15 +252,14 @@ class DigitalChannel(Channel):
     position = property(__get_position, __set_position)
 
     def get_rawdata(self, points=1000):
-        return self.pod.get_rawdata(points)[self.pod.channels.index(self)]
+        time, raw_data = self.pod.get_rawdata(points)
+        return time, raw_data[self.name]
 
 def channel2name(channel):
     if isinstance(channel, Channel):
         return channel.name
     elif isinstance(channel, str):
         return channel
-    
-    #return channel if channel in channels
     raise Exception("%s is not a valid channel." % channel)
 
 class Pod(object):
@@ -197,10 +282,22 @@ class Pod(object):
         return iter(self.channels)
 
     def __getitem__(self, item):
-        return self.__channels[item]
+        try:
+            return self.__channels[item]
+        except:
+            channel = self.scope.get_channel_from_label(item)
+            if channel in self.channels:
+                return channel
+            else:
+                raise KeyError("Pod does not have channel %s" % item)
 
+                    
     def __contains__(self, item):
-        return item in self.channels
+        try:
+            self[item]
+            return True
+        except:
+            return False
 
     def get_rawdata(self, points=1000):
         if points not in (100, 200, 500, 1000, 2000, None):
@@ -244,6 +341,7 @@ class Pod(object):
         t,data = self.get_rawdata(points=points)
         return t, data
 
+
 class AnalogChannel(Channel):
 
     def __init__(self, *args, **kwargs):
@@ -251,54 +349,73 @@ class AnalogChannel(Channel):
 
     def __set_coupling(self, coupling):
         coupling = coupling.strip().upper()
-        if coupling not in (COUPLING_AC,COUPLING_DC,COUPLING_GND):
+        if coupling not in COUPLINGS: 
             raise TypeError("Invalid channel coupling specified")
-        self.scope.command(":"+self.name+":COUP "+coupling.strip().ucase())
-
+        self.scope.command(":"+self.name+":COUP "+coupling.strip().upper())
     def __get_coupling(self):
         return self.scope.query(":"+self.name+":COUP?")
     coupling = property(__get_coupling, __set_coupling)
 
-    def __get_max(self):
+    @property
+    def max(self):
         return float(self.scope.query(":MEAS:VMAX? %s" % self.name))
-    max = property(__get_max)
-
-    def __get_min(self):
+    
+    @property
+    def min(self):
         return float(self.scope.query(":MEAS:VMIN? %s" % self.name))
-    min = property(__get_min)
-
-    def __get_avg(self):
+    
+    @property
+    def avg(self):
         return float(self.scope.query(":MEAS:VAV? %s" % self.name))
-    avg = property(__get_avg)
 
-    def __get_amplitude(self):
+    @property
+    def amplitude(self):
         return float(self.scope.query(":MEAS:VAMP? %s" % self.name))
-    amplitude = property(__get_amplitude)
 
-    def __get_duty_cycle(self):
+    @property
+    def duty_cycle(self):
         return float(self.scope.query(":MEAS:DUTY? %s" % self.name))
-    duty_cycle = property(__get_duty_cycle)
-    
-    def __get_rise_time(self):
-        return float(self.scope.query(":MEAS:RISE? %s" % self.name))
-    rise_time = property(__get_rise_time)
+   
+    @property
+    def rise_time(self):
+        return float(self.scope.query(":MEAS:RIS? %s" % self.name))
 
-    def __get_fall_time(self):
+    @property
+    def fall_time(self):
         return float(self.scope.query(":MEAS:FALL? %s" % self.name))
-    fall_time = property(__get_fall_time)
-
-    def __get_frequency(self):
-        return float(self.scope.query(":MEAS:FREQ? %s" % self.name))
-    frequency = property(__get_frequency)
-
-    def __get_pwidth(self):
-        return float(self.scope.query(":MEAS:PWIDTH? %s" % self.name))
-    pwidth = property(__get_pwidth)
-
-    def __get_nwidth(self):
-        return float(self.scope.query(":MEAS:NWIDTH? %s" % self.name))
-    nwidth = property(__get_nwidth)
     
+    @property
+    def frequency(self):
+        return float(self.scope.query(":MEAS:FREQ? %s" % self.name))
+
+    @property
+    def pwidth(self):
+        return float(self.scope.query(":MEAS:PWIDTH? %s" % self.name))
+
+    @property
+    def nwidth(self):
+        return float(self.scope.query(":MEAS:NWIDTH? %s" % self.name))
+    
+    @property
+    def base(self):
+        return float(self.scope.query(":MEAS:VBAS? %s" % self.name))
+
+    @property
+    def top(self):
+        return float(self.scope.query(":MEAS:VTOP? %s" % self.name))
+    
+    @property
+    def overshoot(self):
+        return float(self.scope.query(":MEAS:OVER? %s" % self.name))
+
+    @property
+    def undershoot(self):
+        return float(self.scope.query(":MEAS:PRES? %s" % self.name))
+
+    @property
+    def phase(self):
+        return float(self.scope.query(":MEAS:PHAS? %s" % self.name))
+
     def get_rawdata(self, points=1000):
         if points not in (100, 200, 500, 1000, 2000, None):
             raise ValueError("Number of points for acquisition should be 100, 200, 500, 1000 or 2000")
@@ -359,12 +476,13 @@ class StandardTrigger(object):
         self.scope = parent
 
     def __set_source(self, source):
-        if isinstance(source, Channel): source = source.name
-        if source not in TRIGGER_SOURCES:
+        try:
+            source = self.scope[source]
+        except:
             raise ValueError("%s not a valid trigger source." % source)
-        self.scope.command(":TRIG:SOUR %s" % source)
+        self.scope.command(":TRIG:SOUR %s" % source.name)
     def __get_source(self):
-        return self.scope.query(":TRIG:SOUR?")
+        return self.scope[self.scope.query(":TRIG:SOUR?")]
     source = property(__get_source, __set_source)
 
     def __set_coupling(self, source):
@@ -374,7 +492,14 @@ class StandardTrigger(object):
     def __get_coupling(self):
         return self.scope.command(":TRIG:COUP?")
     coupling = property(__get_coupling, __set_coupling)
-
+    
+    def __get_sweep(self):
+        return self.scope.command(":TRIG:SWEEP?")
+    def __set_sweep(self, value):
+        if value not in (NORMAL, AUTO, AUTO_LEVEL):
+            raise ValueError("%s not a valid trigger sweep." % value)
+        return self.scope.command(":TRIG:SWEEP %s" % value)
+    sweep = property(__get_sweep, __set_sweep)
 
 class EdgeTrigger(StandardTrigger):
 
@@ -393,12 +518,12 @@ class EdgeTrigger(StandardTrigger):
         pass
 
 
-class Scope(object):
+class Scope(Instrument):
     """
     A class for controlling the Agilent 54622D Mixed Signal Oscilloscope
     """
 
-    def __init__(self,port="COM1",baudRate=57600, timeout=5, verbose=False):
+    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False):
         """
         Creates a connection to the serial port with the specified settings.
         
@@ -407,19 +532,10 @@ class Scope(object):
         timeout -> Maximum time in seconds to wait for scope to respond.
                    Possible values: an int >= 0
         """
-        self.comPortName=port
-        self.baudRate=baudRate
-        self.timeout=timeout
-
-        from serial import Serial
-        self.port=Serial(port=self.comPortName,baudrate=self.baudRate,timeout=self.timeout)
-        self.port.flush()
-        self.port.flushInput()
-        self.port.close()
-        self.channels = {}
+        Instrument.__init__(self, port=port, baud=baud, timeout=timeout, verbose=verbose)
+        self.channels = {} 
         self.cursors = {}
         self.pods = {}
-        self.verbose = verbose
 
         # Channels
         self.channels[ANALOG_1] = AnalogChannel(self, ANALOG_1)
@@ -465,7 +581,6 @@ class Scope(object):
         self.d14 = self[DIGITAL_14]
         self.d15 = self[DIGITAL_15]
 
-        self.digital = GroupProxy([self[i] for i in DIGITAL])  
         
         self.saved_setup = None
     
@@ -474,30 +589,6 @@ class Scope(object):
 
     def __repr__(self):
         return str(self)
-
-    def errors(self, raise_errors=False):
-        """
-        Returns all errors from the scope's error queue.
-        """
-        self.port.open()
-        try:
-            errors=[]
-            self.port.write(":SYSTEM:ERR?\n")
-            error=self.port.readline()
-            while error.find("+0") is -1 and error is not '':
-                errors.append(error)
-                self.port.write(":SYSTEM:ERR?\n")
-                error=self.port.readline()
-            self.port.flush()
-            self.port.flushInput()
-        except:
-            self.port.close()
-            raise
-        self.port.close()
-        if raise_errors:
-            if errors:
-                raise Exception(errors[0])
-        return errors
 
     def __iter__(self):
         return iter([self.a1, self.a2, self.d0, self.d1, self.d2, self.d3, self.d4, self.d5, self.d6, self.d7, self.d8, self.d9, self.d10, self.d11, self.d12, self.d13, self.d14, self.d15])
@@ -519,54 +610,9 @@ class Scope(object):
         
         if key in self:
             return key
-        
-        raise KeyError("Nope.")
+       
+        return self.get_channel_from_label(key)
 
-    def query(self,query,type=QUERY_ASCII):
-        return self.commands(((query, type),))[0]
-
-    def command(self,command):
-        self.commands(((command,False),))
-
-    def commands(self, commands):
-        self.errors()
-        self.port.open()
-        result = None
-        # Make sure we clear the scope output before executing commands
-        commands = [("*CLS", QUERY_NONE)] + list(commands) 
-        result = []
-        try:
-            for command, query in commands:
-                if self.verbose:
-                    print "--> '%s'" % command
-                self.port.write(command+"\n")
-                if query == QUERY_ASCII:
-                    s = self.port.readline().strip()
-                    if self.verbose:
-                        print "<-- '%s'" % s
-                    result.append(s)
-                elif query == QUERY_BINARY:
-                    pound, digits = self.port.read(2)
-                    if pound != "#": raise Exception("Unexpected response in binary query.")
-                    try: digits =int(digits)
-                    except: raise Exception("Could not read binary query header.")
-                    try: size = int(self.port.read(digits))
-                    except: raise Exception("Could not read binary query block size.")
-                    binstring = ''
-                    while len(binstring) < size:
-                        binstring += self.port.read()
-                    result.append(binstring)
-                    if self.verbose:
-                        if len(binstring) > 0:
-                            print "<-- <%d bytes of binary data>" % len(binstring)
-                else:
-                    result.append(None)
-        except:
-            self.port.close()
-            raise
-        self.port.close()
-        self.errors(True)
-        return result[1:]
 
     def single(self):
         """
@@ -580,18 +626,28 @@ class Scope(object):
         """
         self.command(":RUN")
 
-    def __get_lock(self):
-        return self.query(":SYST:LOCK?")
+    def digitize(self):
+        self.command(":DIG")
+
     def __set_lock(self, lock):
         self.command(":SYST:LOCK %d" % (1 if bool(lock) else 0))
-    lock = property(__get_lock, __set_lock)
+
+    def lock(self):
+        self.__set_lock(True)
+    def unlock(self):
+        self.__set_lock(False)
 
     def __screenshot(self):
         self.errors()
         self.port.open()
         try:
-            self.port.write(":DISP:DATA? TIFF,SCR\n")
-            pound, digits = self.port.read(2)
+            cmd = ":DISP:DATA? TIFF,SCR"
+            print "--> '%s'" % cmd 
+            self.port.write(cmd + '\n')
+
+            resp = self.port.read(2)
+            pound, digits = resp
+            print "<-- '%s'" % resp
             if pound != "#": raise Exception("Unexpected response in screenshot acquisition.")
             try: digits =int(digits)
             except: raise Exception("Could not read screenshot block size.")
@@ -601,30 +657,32 @@ class Scope(object):
             # Hack so we get ALL the data from the slow-ass scope.
             while len(retval) < size:
                 retval += self.port.read()
+            print "<-- <%d bytes of binary data>" % len(retval)
+            
         except:
             self.port.close()
             raise
         self.port.close()
         return retval
 
-    screenshot = property(__screenshot)
-
-    def screen(self, filename=None):
+    def take_screenshot(self, filename=None):
         if filename == None:
             filename = time.strftime("screen_%Y%m%d%H%M%S.png")
         
-        screen_data = self.screenshot
+        screen_data = self.__screenshot()
         try:
             import ImageFile
         except:
             fp = open(filename, 'wb')
             fp.write(screen_data)
             fp.close()
+            return
         p = ImageFile.Parser()
         p.feed(screen_data)
         im = p.close()
         im.save(filename)
-    
+        return screen_data
+
     def acquire(self, waveforms, points=1000):
         # TODO, UPDATE THIS TO INCLUDE ANALOG STUFF
         t = []
@@ -636,34 +694,44 @@ class Scope(object):
                 get_pod2=True 
         data = {}
         if get_pod1:
-            t, d = self[POD1].get_data(points=points)
+            t, d = self.pod1.get_data(points=points)
             data.update(d)
         if get_pod2:
-            t, d = self[POD2].get_data(points=points)
+            t, d = self.pod2.get_data(points=points)
             data.update(d)
 
         retval = {}
         for waveform in waveforms:
-            if waveform in data:
-                retval[waveform] = data[waveform]
+            name = self[waveform].name
+            if name in data:
+                retval[waveform] = data[name]
             else:
                 t, d = self[waveform].get_data(points=points)
                 retval[waveform] = d
 
         return t, retval
 
-    def save_labels(self, *channels):
+    def get_labels(self, *channels):
         channels = channels or ANALOG + DIGITAL
         retval = {}
         for channel in channels:
             retval[channel] = self[channel].save_label()
-        self.last_labels = retval
         return retval
+
+    def save_labels(self, *channels):
+        self.last_labels = self.get_labels(*channels)
+        return self.last_labels
 
     def clear_labels(self, *channels):
         channels = channels or ANALOG + DIGITAL
         for channel in channels:
             self[channel].label = ""
+
+    def get_channel_from_label(self, label):
+        for channel in self:
+            if channel.label.upper().strip() == label.upper().strip():
+                return channel
+        raise ValueError("No channel with label %s" % label)
 
     def restore_labels(self, labels=None):
         if labels == None:
@@ -678,6 +746,7 @@ class Scope(object):
     def __get_serial_number(self):
         return self.query(":SER?")
     serial_number = property(__get_serial_number)
+
     def stop(self):
         self.command(":STOP")
 
@@ -697,10 +766,10 @@ class Scope(object):
         i2can = I2CAnalyzer(t, sda=channels[sda], scl=channels[scl])
         return i2can.transactions()
 
-    def decode_spi(self, miso=DIGITAL_0, mosi=DIGITAL_1, sck=DIGITAL_2, cs=DIGITAL_3, points=1000):
+    def decode_spi(self, miso='MISO', mosi='MOSI', sck='SCK', cs='CS', points=1000):
         t, channels = self.acquire((miso, mosi, sck, cs), points=points)
-        spian = SPIAnalyzer(t, channels[miso], channels[mosi], channels[sck], channels[cs])
-        return spian.transactions()
+        analyzer = SPIAnalyzer(t, channels[miso], channels[mosi], channels[sck], channels[cs])
+        return analyzer.transactions()
 
     def show(self, transaction):
         self[X1].pos = transaction.timebase[0]
