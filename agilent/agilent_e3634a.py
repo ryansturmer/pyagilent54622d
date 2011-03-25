@@ -33,3 +33,14 @@ class PowerSupply(Instrument):
         else:
             self.command("OUTPUT OFF")
 
+    def is_on(self):
+        return self.query("OUTP?")
+
+    def __set_message(self, msg):
+        msg = str(msg)
+        if len(msg) > 12:
+            raise ValueError("Message '%s' too long. (12 chars or less)" % msg)
+        self.command("DISP:TEXT '%s'" % msg)
+    def __get_message(self, msg):
+        return self.query("DISP:TEXT?")
+    message = property(__get_message, __set_message)

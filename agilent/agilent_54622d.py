@@ -1,7 +1,7 @@
 from __future__ import with_statement
 from common import Instrument
 from processing import *
-
+import time
 
 ANALOG_1 = "CHAN1"
 ANALOG_2 = "CHAN2"
@@ -425,6 +425,8 @@ class Scope(Instrument):
     """
     A class for controlling the Agilent 54622D Mixed Signal Oscilloscope
     """
+    BMP = 0
+    PNG = 1
 
     def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False):
         """
@@ -545,12 +547,12 @@ class Scope(Instrument):
         self.port.open()
         try:
             cmd = ":DISP:DATA? TIFF,SCR"
-            print "--> '%s'" % cmd 
+            #print "--> '%s'" % cmd 
             self.port.write(cmd + '\n')
 
             resp = self.port.read(2)
             pound, digits = resp
-            print "<-- '%s'" % resp
+            #print "<-- '%s'" % resp
             if pound != "#": raise Exception("Unexpected response in screenshot acquisition.")
             try: digits =int(digits)
             except: raise Exception("Could not read screenshot block size.")
@@ -560,7 +562,7 @@ class Scope(Instrument):
             # Hack so we get ALL the data from the slow-ass scope.
             while len(retval) < size:
                 retval += self.port.read()
-            print "<-- <%d bytes of binary data>" % len(retval)
+            #print "<-- <%d bytes of binary data>" % len(retval)
             
         except:
             self.port.close()
@@ -586,6 +588,22 @@ class Scope(Instrument):
         im.save(filename)
         return screen_data
 
+    def get_screenshot(self, format=0):
+        screen_data = self.__screenshot()
+        if format == Scope.BMP:
+            return screen_data
+        elif format == Scope.PNG:
+            import ImageFile, StringIO
+            p = ImageFile.Parser()
+            p.feed(screen_data)
+            im = p.close()
+            fp = StringIO.StringIO()
+            im.save(fp, "PNG")
+            value = fp.getvalue()
+            fp.close()
+            return value
+        else:
+            raise ValueError("Invalid image type.")
     def acquire(self, waveforms, points=1000):
         # TODO, UPDATE THIS TO INCLUDE ANALOG STUFF
         t = []

@@ -76,6 +76,8 @@ class Instrument(object):
         self.errors(True)
         return result[1:]
 
+    def reset(self):
+        self.command("*RST")
     def errors(self, raise_errors=False):
         """
         Returns all errors from the scope's error queue.
@@ -99,6 +101,8 @@ class Instrument(object):
             if errors:
                 raise Exception(errors[0])
         return errors
+
+
 
 
 def format_number(x):
