@@ -1,5 +1,5 @@
 from __future__ import with_statement
-from common import Instrument
+from common import Instrument, QUERY_BINARY, QUERY_ASCII, QUERY_NONE
 from processing import *
 import time
 
