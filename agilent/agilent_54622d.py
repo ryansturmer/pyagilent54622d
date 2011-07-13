@@ -1,5 +1,5 @@
 from __future__ import with_statement
-from common import Instrument, QUERY_BINARY, QUERY_ASCII, QUERY_NONE
+from common import Instrument, QUERY_ASCII, QUERY_BINARY, QUERY_NONE
 from processing import *
 import time
 
@@ -188,6 +188,7 @@ class Pod(object):
         try:
             return self.__channels[item]
         except:
+            #print "Getting channel from label in pod"
             channel = self.scope.get_channel_from_label(item)
             if channel in self.channels:
                 return channel
@@ -196,11 +197,14 @@ class Pod(object):
 
                     
     def __contains__(self, item):
-        try:
-            self[item]
+        if item in self.channels:
             return True
-        except:
-            return False
+        else:
+            try:
+                self[item]
+                return True
+            except:
+                return False
 
     def get_rawdata(self, points=1000):
         if points not in (100, 200, 500, 1000, 2000, None):
@@ -515,7 +519,8 @@ class Scope(Instrument):
         
         if key in self:
             return key
-       
+      
+        #print "getting channel from label in scope class"
         return self.get_channel_from_label(key)
 
 
@@ -609,9 +614,9 @@ class Scope(Instrument):
         t = []
         get_pod1=get_pod2=False
         for waveform in waveforms:
-            if waveform in self[POD1]:
+            if waveform in self.pod1:
                 get_pod1=True
-            elif waveform in self[POD2]:
+            elif waveform in self.pod2:
                 get_pod2=True 
         data = {}
         if get_pod1:
