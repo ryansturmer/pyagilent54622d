@@ -11,7 +11,7 @@ class Instrument(object):
     '''
     Abstract baseclass for Agilent HPIB Instruments that can chat over RS-232
     '''
-    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False, rtscts=False, dsrdtr=False, stopbits=serial.STOPBITS_ONE):
+    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False, rtscts=True, dsrdtr=False, stopbits=serial.STOPBITS_ONE):
         """
         Creates a connection to the serial port with the specified settings.
         
@@ -25,6 +25,7 @@ class Instrument(object):
         self.timeout=timeout
 
         self.port=serial.Serial(port=self.comPortName,baudrate=self.baudRate,timeout=self.timeout, rtscts=rtscts, dsrdtr=dsrdtr, stopbits=stopbits)
+        self.port.setRtsCts(rtscts)
         self.port.flush()
         self.port.flushInput()
         self.port.close()
@@ -39,6 +40,9 @@ class Instrument(object):
     def commands(self, commands):
         self.errors()
         self.port.open()
+        self.port.flush()
+        self.port.write("\n")
+        #self.errors()
         result = None
         # Make sure we clear the scope output before executing commands
         commands = [("*CLS", QUERY_NONE)] + list(commands) 

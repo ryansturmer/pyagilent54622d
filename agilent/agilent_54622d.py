@@ -369,11 +369,11 @@ class Cursor(object):
         self.scope = parent
 
     def __get_position(self):
-        self.scope.command("MARK:%sP?" % self.name)
+        return float(self.scope.query(":MARK:%sP?" % self.name))
 
     def __set_position(self, pos):
         pos = float(pos)
-        self.scope.command("MARK:%sP %f" % (self.name, pos))
+        self.scope.command(":MARK:%sP %f" % (self.name, pos))
 
     pos = property(__get_position, __set_position)
 
@@ -432,7 +432,7 @@ class Scope(Instrument):
     BMP = 0
     PNG = 1
 
-    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False):
+    def __init__(self,port="COM1",baud=57600, timeout=5, verbose=False, rtscts=True):
         """
         Creates a connection to the serial port with the specified settings.
         
@@ -441,7 +441,7 @@ class Scope(Instrument):
         timeout -> Maximum time in seconds to wait for scope to respond.
                    Possible values: an int >= 0
         """
-        Instrument.__init__(self, port=port, baud=baud, timeout=timeout, verbose=verbose)
+        Instrument.__init__(self, port=port, baud=baud, timeout=timeout, verbose=verbose, rtscts=rtscts)
         self.channels = {} 
         self.cursors = {}
         self.pods = {}
