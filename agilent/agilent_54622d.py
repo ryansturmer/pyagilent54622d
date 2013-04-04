@@ -1,6 +1,7 @@
 from __future__ import with_statement
-from common import Instrument, QUERY_ASCII, QUERY_BINARY, QUERY_NONE
+from common import Instrument, PNGImage, QUERY_ASCII, QUERY_BINARY, QUERY_NONE
 from processing import *
+from StringIO import StringIO
 import time
 
 ANALOG_1 = "CHAN1"
@@ -65,12 +66,18 @@ PHASE = "PHAS"
 PRESHOOT = "PRES"
 PULSE_WIDTH = "PWID"
 
+def format_nr3(number):
+    return '{:+E}'.format(float(number))
 class Channel(object):
     
     def __init__(self, parent, name):
         self.scope = parent
         self.name = name
         self.last_label = None
+
+    @classmethod
+    def format_label(cls, label):
+        return ("%-6s" % str(label).strip()).strip() 
 
     def __get_visible(self):
         return bool(int(self.scope.query(":%s:DISP?" % self.name)))
@@ -88,16 +95,19 @@ class Channel(object):
         self.visible = False
 
     def __set_label(self, label):
-        label = str(label)
-        self.scope.command(':%s:LAB "%s"' % (self.name, ("%-6s" % label).strip()))
-
+        label = Channel.format_label(label)
+        self.scope.command(':%s:LAB "%s"' % (self.name, label))
+        self.scope.label_cache[self] = label
     def __get_label(self):
-        return self.scope.query(":%s:LAB?" % self.name)[1:-1]
+        label = self.scope.query(":%s:LAB?" % self.name)[1:-1]
+        self.scope.label_cache[self] = label
+        return label
     label = property(__get_label, __set_label)
 
     def save_label(self):
-        self.last_label = self.label
-        return self.label
+        label = self.label
+        self.last_label = label 
+        return label
 
     def restore_label(self, label=None):
         if label == None:
@@ -137,7 +147,7 @@ class DigitalChannel(Channel):
     def __init__(self, parent, name):
         Channel.__init__(self, parent.scope, name)
         self.pod = parent
-
+        
     def __get_threshold(self):
         return None
 
@@ -248,11 +258,33 @@ class Pod(object):
         t,data = self.get_rawdata(points=points)
         return t, data
 
+    def show(self):
+        for channel in self:
+            channel.show()
+    
+    def hide(self):
+        for channel in self:
+            channel.hide()
 
 class AnalogChannel(Channel):
 
     def __init__(self, *args, **kwargs):
         Channel.__init__(self, *args, **kwargs)
+
+    # Vertical voltage scale
+    def __get_scale(self):
+        return float(self.scope.query(":%s:SCAL?" % self.name))
+    def __set_scale(self, scale):
+        self.scope.query(":%s:SCAL %s V" % (self.name, format_nr3(scale)))
+    scale = property(__get_scale, __set_scale)
+
+    # Vertical offset (in volts)
+    def __get_offset(self):
+        return float(self.scope.query(":%s:OFFS?" % self.name))
+        
+    def __set_offset(self, offset):
+        self.scope.command(":%s:OFFS %s V" % (self.name, format_nr3(offset)))
+    offset = property(__get_offset, __set_offset)
 
     def __set_coupling(self, coupling):
         coupling = coupling.strip().upper()
@@ -407,6 +439,7 @@ class StandardTrigger(object):
             raise ValueError("%s not a valid trigger sweep." % value)
         return self.scope.command(":TRIG:SWEEP %s" % value)
     sweep = property(__get_sweep, __set_sweep)
+    mode = property(__get_sweep, __set_sweep) # Alias for this because that's what it's called on the scope
 
 class EdgeTrigger(StandardTrigger):
 
@@ -421,9 +454,19 @@ class EdgeTrigger(StandardTrigger):
         return self.scope.query(":TRIG:SLOP?")
     slope = property(__get_slope, __set_slope)
 
+    def __get_level(self):
+        return float(self.scope.query(":TRIG:EDGE:LEV?"))
     def __set_level(self, level):
-        pass
+        self.scope.command(":TRIG:EDGE:LEV %s" % format_nr3(level))
+    level = property(__get_level, __set_level)
 
+class BiDict(dict):
+    def __init__(self, *args):
+        dict.__init__(self, args)
+
+    def __setitem__(self, key, val):
+        dict.__setitem__(self, key, val)
+        dict.__setitem__(self, val, key)
 
 class Scope(Instrument):
     """
@@ -445,6 +488,8 @@ class Scope(Instrument):
         self.channels = {} 
         self.cursors = {}
         self.pods = {}
+
+        self.label_cache = {}
 
         # Channels
         self.channels[ANALOG_1] = AnalogChannel(self, ANALOG_1)
@@ -489,10 +534,11 @@ class Scope(Instrument):
         self.d13 = self[DIGITAL_13]
         self.d14 = self[DIGITAL_14]
         self.d15 = self[DIGITAL_15]
-
         
         self.saved_setup = None
     
+        self.label_cache = BiDict()
+
     def __str__(self):
         return "<Agilent 54622D on %s @ %d Baud>" % (self.comPortName, self.baudRate)
 
@@ -502,14 +548,33 @@ class Scope(Instrument):
     def __iter__(self):
         return iter([self.a1, self.a2, self.d0, self.d1, self.d2, self.d3, self.d4, self.d5, self.d6, self.d7, self.d8, self.d9, self.d10, self.d11, self.d12, self.d13, self.d14, self.d15])
 
+    def __set_timescale(self, scale):
+        self.command(":TIM:SCAL %s" % format_nr3(scale))
+    def __get_timescale(self):
+        return float(self.query(":TIM:SCAL?"))
+    timescale = property(__get_timescale, __set_timescale)
+
+    # Horizontal position (Seconds)
+    def __set_pos(self, pos):
+        self.command(":TIM:POS %s" % format_nr3(pos))
+    def __get_pos(self):
+        return float(self.query(":TIM:POS?"))
+    position = property(__get_pos, __set_pos)
+
     def clear_labels(self):
         for channel in self:
             channel.label = ""
-
+            self.label_cache[channel] = ""
+    
     def set_labels(self, labels):
-        for channel in labels:
-            self[channel].label = labels[channel]
+        for channel, label in labels.items():
+            self.set_label(channel, label)
 
+    def __getattr__(self, item):
+        try:
+            return self.get_channel_from_label(item)
+        except:
+            raise AttributeError
     def __getitem__(self, key):
         for x in (self.channels, self.cursors) + tuple(self.pods.values()) + (self.pods,):
             try:
@@ -525,22 +590,22 @@ class Scope(Instrument):
 
 
     def single(self):
-        """
+        '''
         Aquire a single trigger of data.
-        """
+        '''
         self.command(":SING")
 
     def run(self):
-        """
+        '''
         Begin repetetive aquisitions.
-        """
+        '''
         self.command(":RUN")
 
     def digitize(self):
         self.command(":DIG")
 
     def __set_lock(self, lock):
-        self.command(":SYST:LOCK %d" % (1 if bool(lock) else 0))
+        self.command(":SYST:LOCK %d" % (1 if lock else 0))
 
     def lock(self):
         self.__set_lock(True)
@@ -576,22 +641,28 @@ class Scope(Instrument):
         return retval
 
     def take_screenshot(self, filename=None):
-        if filename == None:
-            filename = time.strftime("screen_%Y%m%d%H%M%S.png")
+        '''
+        Take screenshot.  Save as png if filename provided.
+        '''
+        import ImageFile
         
+        # Actually collect data from the scope, once we've determined that PIL is present
         screen_data = self.__screenshot()
-        try:
-            import ImageFile
-        except:
-            fp = open(filename, 'wb')
-            fp.write(screen_data)
-            fp.close()
-            return
+
+        # Create an image in memory so we can manipulate/reformat it
         p = ImageFile.Parser()
         p.feed(screen_data)
         im = p.close()
-        im.save(filename)
-        return screen_data
+        
+        # This will save the image in whatever format pil picks for the file extension
+        if filename:
+            im.save(filename)
+
+        buffer = StringIO()
+        im.save(buffer, 'PNG')
+        png_screen_data = buffer.getvalue()
+        buffer.close()
+        return PNGImage(png_screen_data)
 
     def get_screenshot(self, format=0):
         screen_data = self.__screenshot()
@@ -634,7 +705,6 @@ class Scope(Instrument):
             else:
                 t, d = self[waveform].get_data(points=points)
                 retval[waveform] = d
-
         return t, retval
 
     def get_labels(self, *channels):
@@ -654,10 +724,17 @@ class Scope(Instrument):
             self[channel].label = ""
 
     def get_channel_from_label(self, label):
-        for channel in self:
-            if channel.label.upper().strip() == label.upper().strip():
+        label = Channel.format_label(label)
+        if label in self.label_cache:
+            channel = self.label_cache[label]
+            if channel.label == label:
                 return channel
-        raise ValueError("No channel with label %s" % label)
+
+        # Fallback: scan ALL the channels
+        for channel in self:
+            if channel.label == label:
+                return channel
+        raise KeyError("No channel with label %s" % label)
 
     def restore_labels(self, labels=None):
         if labels == None:
@@ -720,13 +797,13 @@ class Scope(Instrument):
     def reset(self):
         self.command("*RST")
 
-    def __get_trigger(self):
+    @property
+    def trigger(self):
         type = self.query(":TRIG:MODE?")
         if type == "EDGE":
             return EdgeTrigger(self)
         else:
             return None
-    trigger = property(__get_trigger)
 
     def get_data(self, *channels):
         retval = []

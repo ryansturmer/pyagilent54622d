@@ -10,7 +10,7 @@ def normalize(l, minimum=-1.0, maximum=1.0):
 class PowerSupply(Instrument): 
 
     def __init__(self,port="COM1",baud=9600, timeout=5, verbose=False):
-        Instrument.__init__(self, port, baud, timeout, verbose, stopbits=serial.STOPBITS_TWO)
+        Instrument.__init__(self, port, baud, timeout, verbose)
 
     def apply(self, voltage, current):
         self.command("APPL %s,%s" % (voltage, current))

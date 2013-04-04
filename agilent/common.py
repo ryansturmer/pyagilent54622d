@@ -2,11 +2,10 @@ from __future__ import with_statement
 import time
 import serial
 
-
 QUERY_NONE = 0
 QUERY_ASCII = 1
 QUERY_BINARY = 2
-
+    
 class Instrument(object):
     '''
     Abstract baseclass for Agilent HPIB Instruments that can chat over RS-232
@@ -106,14 +105,17 @@ class Instrument(object):
                 raise Exception(errors[0])
         return errors
 
-
-
-
 def format_number(x):
     if x == None:
         return "DEF"
     return ("%g" % x).upper()
 
-if __name__ == '__main__':
-    scope=Scope(port="COM1", baudRate=57600)
+class PNGImage(object):
+    '''
+    Wrapper for PNG image data that is ipython-notebook formattable
+    '''
+    def __init__(self, image_data):
+        self.image_data = image_data
 
+    def _repr_png_(self):
+        return self.image_data
